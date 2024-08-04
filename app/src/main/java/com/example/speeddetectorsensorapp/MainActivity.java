@@ -13,8 +13,6 @@ import android.widget.ToggleButton;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.app.AppCompatDelegate;
 
-
-
 public class MainActivity extends AppCompatActivity {
 
     private SensorManager sensorManager;
@@ -27,6 +25,10 @@ public class MainActivity extends AppCompatActivity {
     private float currentSpeed = 0;
 
     private KalmanFilter kalmanFilter;
+    private float[] gravity = new float[3];
+    private float[] linearAcceleration = new float[3];
+    private long lastUpdateTime;
+    private float lastSpeed = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +69,8 @@ public class MainActivity extends AppCompatActivity {
             boolean isChecked = ((ToggleButton) view).isChecked();
             setTheme(isChecked);
         });
+
+        lastUpdateTime = System.currentTimeMillis();
     }
 
     private void applyTheme() {
@@ -95,11 +99,42 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onSensorChanged(SensorEvent event) {
             if (event.sensor.getType() == Sensor.TYPE_ACCELEROMETER) {
-                float x = event.values[0];
-                float y = event.values[1];
-                float z = event.values[2];
-                float acceleration = (float) Math.sqrt(x * x + y * y + z * z);
-                currentSpeed = calculateSpeed(acceleration);
+                final float alpha = 0.8f;
+
+                // Isolate the force of gravity with the low-pass filter.
+                gravity[0] = alpha * gravity[0] + (1 - alpha) * event.values[0];
+                gravity[1] = alpha * gravity[1] + (1 - alpha) * event.values[1];
+                gravity[2] = alpha * gravity[2] + (1 - alpha) * event.values[2];
+
+                // Remove the gravity contribution with the high-pass filter.
+                linearAcceleration[0] = event.values[0] - gravity[0];
+                linearAcceleration[1] = event.values[1] - gravity[1];
+                linearAcceleration[2] = event.values[2] - gravity[2];
+
+                float acceleration = (float) Math.sqrt(
+                        linearAcceleration[0] * linearAcceleration[0] +
+                        linearAcceleration[1] * linearAcceleration[1] +
+                        linearAcceleration[2] * linearAcceleration[2]
+                );
+
+                long currentTime = System.currentTimeMillis();
+                float dt = (currentTime - lastUpdateTime) / 1000f; // Convert to seconds
+
+                // Apply Kalman filter to smooth acceleration
+                float filteredAcceleration = kalmanFilter.update(acceleration);
+
+                // Integrate acceleration to get speed
+                currentSpeed = lastSpeed + filteredAcceleration * dt;
+
+                // Apply a simple low-pass filter to reduce noise
+                currentSpeed = 0.9f * currentSpeed + 0.1f * lastSpeed;
+
+                // Ensure speed is non-negative
+                currentSpeed = Math.max(0, currentSpeed);
+
+                lastSpeed = currentSpeed;
+                lastUpdateTime = currentTime;
+
                 updateSpeedDisplay();
             }
         }
@@ -109,12 +144,6 @@ public class MainActivity extends AppCompatActivity {
             // Not used in this example
         }
     };
-
-    private float calculateSpeed(float acceleration) {
-        // Subtract Earth's gravity to focus on actual device movement
-        float filteredAcceleration = kalmanFilter.update(Math.abs(acceleration - SensorManager.GRAVITY_EARTH));
-        return filteredAcceleration;
-    }
 
     private float convertSpeed(float speedMps, String unit) {
         switch (unit) {
